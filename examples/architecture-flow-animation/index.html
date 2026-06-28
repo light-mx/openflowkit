@@ -1,0 +1,638 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenFlowKit — Architecture Flow Animation (MVP)</title>
+    <style>
+      :root {
+        --bg: #f6f7f9;
+        --surface: #ffffff;
+        --border: #e4e7ec;
+        --text: #1d2433;
+        --muted: #667085;
+        --primary: #f97316;
+        --edge: #98a2b3;
+        --edge-live: #f97316;
+        --packet: #f97316;
+        --node-fill: #ffffff;
+        --node-stroke: #d0d5dd;
+        --shadow: rgba(16, 24, 40, 0.08);
+      }
+      :root[data-theme='dark'] {
+        --bg: #0d1117;
+        --surface: #161b22;
+        --border: #2d333b;
+        --text: #e6edf3;
+        --muted: #8b949e;
+        --primary: #fb923c;
+        --edge: #4b5563;
+        --edge-live: #fb923c;
+        --packet: #fbbf24;
+        --node-fill: #1c2128;
+        --node-stroke: #30363d;
+        --shadow: rgba(0, 0, 0, 0.5);
+      }
+
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+        display: flex;
+        flex-direction: column;
+        min-height: 100%;
+      }
+
+      header {
+        padding: 18px 24px 8px;
+      }
+      header h1 { margin: 0; font-size: 18px; font-weight: 700; }
+      header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+
+      .stage {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 8px 24px;
+        min-height: 0;
+      }
+      svg#diagram {
+        width: 100%;
+        max-width: 880px;
+        height: auto;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        box-shadow: 0 12px 40px var(--shadow);
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 24px 24px;
+        max-width: 880px;
+        width: 100%;
+        margin: 0 auto;
+      }
+      button {
+        font: inherit;
+        font-weight: 600;
+        font-size: 13px;
+        color: var(--text);
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 14px;
+        cursor: pointer;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      button:hover { border-color: var(--primary); }
+      button.primary {
+        background: var(--primary);
+        border-color: var(--primary);
+        color: #fff;
+        min-width: 96px;
+      }
+      .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+      .seg button { border: 0; border-radius: 0; border-right: 1px solid var(--border); }
+      .seg button:last-child { border-right: 0; }
+      .seg button[aria-pressed='true'] { background: var(--primary); color: #fff; }
+      .scrub { flex: 1; min-width: 180px; display: flex; align-items: center; gap: 10px; }
+      input[type='range'] { width: 100%; accent-color: var(--primary); }
+      .status { font-size: 12px; color: var(--muted); min-width: 150px; }
+      .spacer { flex: 1; }
+      label.small { font-size: 12px; color: var(--muted); margin-right: 4px; }
+
+      .node-label { font-size: 13px; font-weight: 600; fill: var(--text); }
+      .node-sub { font-size: 10px; fill: var(--muted); }
+      .node-glyph { font-size: 22px; }
+      .edge-label { font-size: 10px; fill: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Architecture Flow Animation — MVP</h1>
+      <p>
+        Replicates OpenFlowKit's cinematic build concept (topological order →
+        timeline → progressive reveal) and adds a looping data-flow animation.
+      </p>
+    </header>
+
+    <div class="stage">
+      <svg id="diagram" viewBox="0 0 760 540" role="img" aria-label="Animated architecture diagram"></svg>
+    </div>
+
+    <div class="controls">
+      <button id="playBtn" class="primary">Play</button>
+      <button id="restartBtn">Restart</button>
+
+      <span class="seg" role="group" aria-label="Speed">
+        <button data-speed="slow">Slow</button>
+        <button data-speed="normal" aria-pressed="true">Normal</button>
+        <button data-speed="fast">Fast</button>
+      </span>
+
+      <button id="themeBtn">Dark</button>
+
+      <div class="scrub">
+        <label class="small" for="scrub">Build</label>
+        <input id="scrub" type="range" min="0" max="1000" value="0" step="1" />
+      </div>
+
+      <div class="status" id="status">Ready</div>
+    </div>
+
+    <script type="module">
+      // =====================================================================
+      // Sample architecture graph. (id, label, sub, glyph, x, y) — x/y is the
+      // node's top-left corner in SVG units. A productionized version would
+      // pull these straight from the live store's nodes/edges.
+      // =====================================================================
+      const NODE_W = 168;
+      const NODE_H = 64;
+
+      const nodes = [
+        { id: 'client',  label: 'React App',     sub: 'frontend',  glyph: '🖥️', x: 296, y: 28 },
+        { id: 'gateway', label: 'API Gateway',   sub: 'edge',      glyph: '🚪', x: 296, y: 168 },
+        { id: 'auth',    label: 'Auth Service',  sub: 'service',   glyph: '🔐', x: 96,  y: 308 },
+        { id: 'orders',  label: 'Orders Service',sub: 'service',   glyph: '📦', x: 496, y: 308 },
+        { id: 'db',      label: 'PostgreSQL',    sub: 'database',  glyph: '🐘', x: 296, y: 448 },
+        { id: 'cache',   label: 'Redis',         sub: 'cache',     glyph: '⚡', x: 560, y: 448 },
+      ];
+
+      const edges = [
+        { id: 'e1', source: 'client',  target: 'gateway', label: 'HTTPS' },
+        { id: 'e2', source: 'gateway', target: 'auth',    label: 'verify' },
+        { id: 'e3', source: 'gateway', target: 'orders',  label: 'route' },
+        { id: 'e4', source: 'orders',  target: 'db',      label: 'query' },
+        { id: 'e5', source: 'orders',  target: 'cache',   label: 'get/set' },
+        { id: 'e6', source: 'auth',    target: 'db',      label: 'lookup' },
+      ];
+
+      const nodeById = new Map(nodes.map((n) => [n.id, n]));
+      const edgeById = new Map(edges.map((e) => [e.id, e]));
+
+      // =====================================================================
+      // 1. BUILD PLAN — port of cinematicBuildPlan.ts
+      //    Topological order (Kahn) with a layout tie-break, plus a "lead edge"
+      //    per node (the incoming edge from an already-revealed source).
+      // =====================================================================
+      function inferOrientation(ns) {
+        if (ns.length <= 1) return 'TB';
+        const xs = ns.map((n) => n.x);
+        const ys = ns.map((n) => n.y);
+        const w = Math.max(...xs) - Math.min(...xs);
+        const h = Math.max(...ys) - Math.min(...ys);
+        return w > h ? 'LR' : 'TB';
+      }
+
+      function makeComparator(ns) {
+        const orientation = inferOrientation(ns);
+        return (aId, bId) => {
+          const a = nodeById.get(aId);
+          const b = nodeById.get(bId);
+          if (!a || !b) return aId.localeCompare(bId);
+          if (orientation === 'LR') {
+            if (Math.abs(a.x - b.x) > 10) return a.x - b.x;
+            return a.y - b.y || aId.localeCompare(bId);
+          }
+          if (Math.abs(a.y - b.y) > 10) return a.y - b.y;
+          return a.x - b.x || aId.localeCompare(bId);
+        };
+      }
+
+      function buildPlan(ns, es) {
+        const compare = makeComparator(ns);
+        const indegree = new Map(ns.map((n) => [n.id, 0]));
+        const outgoing = new Map(ns.map((n) => [n.id, []]));
+        es.forEach((e) => {
+          if (!nodeById.has(e.source) || !nodeById.has(e.target) || e.source === e.target) return;
+          outgoing.get(e.source).push(e.id);
+          indegree.set(e.target, indegree.get(e.target) + 1);
+        });
+
+        const queue = ns.map((n) => n.id).filter((id) => indegree.get(id) === 0).sort(compare);
+        const ordered = [];
+        const work = new Map(indegree);
+        while (queue.length) {
+          const id = queue.shift();
+          ordered.push(id);
+          for (const eId of outgoing.get(id)) {
+            const e = edgeById.get(eId);
+            const next = work.get(e.target) - 1;
+            work.set(e.target, next);
+            if (next === 0) {
+              queue.push(e.target);
+              queue.sort(compare);
+            }
+          }
+        }
+
+        let orderedNodeIds = ordered;
+        let hasTopologyFallback = false;
+        if (ordered.length !== ns.length) {
+          orderedNodeIds = ns.map((n) => n.id).sort(compare);
+          hasTopologyFallback = true;
+        }
+
+        const orderIndex = new Map(orderedNodeIds.map((id, i) => [id, i]));
+        const segments = orderedNodeIds.map((targetId) => {
+          // lead edge = best incoming edge whose source is revealed earlier.
+          const candidates = es
+            .filter((e) => {
+              if (e.target !== targetId || e.source === e.target) return false;
+              const s = orderIndex.get(e.source);
+              const t = orderIndex.get(e.target);
+              return s != null && t != null && s < t;
+            })
+            .sort((l, r) => compare(l.source, r.source) || l.id.localeCompare(r.id));
+          const lead = candidates[0] ?? null;
+          return {
+            id: 'segment:' + targetId,
+            targetNodeId: targetId,
+            sourceNodeId: lead ? lead.source : null,
+            leadEdgeId: lead ? lead.id : null,
+          };
+        });
+
+        return { orderedNodeIds, segments, hasTopologyFallback };
+      }
+
+      // =====================================================================
+      // 2. TIMELINE — port of cinematicRenderState.ts
+      //    Expand each segment into timed phases and a speed multiplier.
+      // =====================================================================
+      const SPEED = { slow: 0.72, normal: 1, fast: 1.7 };
+
+      function basePreset(speed) {
+        const m = SPEED[speed] ?? 1;
+        return {
+          introHoldMs: Math.round(200 / m),
+          rootNodeFadeMs: Math.round(320 / m),
+          edgeGrowMs: Math.round(520 / m),
+          targetNodeFadeMs: Math.round(280 / m),
+          settleMs: Math.round(160 / m),
+          finalHoldMs: Math.round(680 / m),
+        };
+      }
+
+      function buildTimeline(plan, preset) {
+        let t = preset.introHoldMs;
+        const segments = plan.segments.map((segment) => {
+          const start = t;
+          const edgeGrowStart = segment.leadEdgeId ? t : null;
+          const edgeGrowEnd = segment.leadEdgeId ? t + preset.edgeGrowMs : null;
+          const nodeFadeStart = edgeGrowEnd ?? t;
+          const nodeFadeEnd =
+            nodeFadeStart + (segment.leadEdgeId ? preset.targetNodeFadeMs : preset.rootNodeFadeMs);
+          const end = nodeFadeEnd + preset.settleMs;
+          t = end;
+          return { segment, start, end, edgeGrowStart, edgeGrowEnd, nodeFadeStart, nodeFadeEnd };
+        });
+        return { preset, plan, segments, totalDurationMs: t + preset.finalHoldMs };
+      }
+
+      // Easing — same curves as the production render state.
+      const clamp01 = (v) => Math.max(0, Math.min(1, v));
+      const easeOutCubic = (v) => 1 - Math.pow(1 - clamp01(v), 3);
+      const easeOutQuart = (v) => 1 - Math.pow(1 - clamp01(v), 4);
+
+      // =====================================================================
+      // 3. RENDER STATE — what is visible / animating at a given time.
+      // =====================================================================
+      function resolveRenderState(timeline, timeMs) {
+        const clamped = Math.max(0, Math.min(timeMs, timeline.totalDurationMs));
+        const visibleNodeIds = new Set();
+        let activeNodeId = null;
+        let activeNodeProgress = 0;
+        let activeEdgeId = null;
+        let activeEdgeProgress = 0;
+        let inFinalHold = false;
+
+        if (clamped < timeline.preset.introHoldMs) {
+          return { visibleNodeIds, builtEdgeIds: new Set(), activeNodeId, activeNodeProgress, activeEdgeId, activeEdgeProgress, complete: false };
+        }
+
+        for (const entry of timeline.segments) {
+          const seg = entry.segment;
+          if (clamped >= entry.end) {
+            visibleNodeIds.add(seg.targetNodeId);
+            continue;
+          }
+          if (entry.edgeGrowStart != null && clamped < entry.edgeGrowEnd) {
+            visibleNodeIds.add(seg.sourceNodeId ?? seg.targetNodeId);
+            activeEdgeId = seg.leadEdgeId;
+            activeEdgeProgress = easeOutQuart(
+              (clamped - entry.edgeGrowStart) / (entry.edgeGrowEnd - entry.edgeGrowStart)
+            );
+            break;
+          }
+          if (seg.sourceNodeId) visibleNodeIds.add(seg.sourceNodeId);
+          activeNodeId = seg.targetNodeId;
+          activeNodeProgress = easeOutCubic(
+            (clamped - entry.nodeFadeStart) / (entry.nodeFadeEnd - entry.nodeFadeStart)
+          );
+          if (activeNodeProgress > 0) visibleNodeIds.add(seg.targetNodeId);
+          break;
+        }
+
+        if (!activeNodeId && !activeEdgeId && clamped >= timeline.totalDurationMs - timeline.preset.finalHoldMs) {
+          timeline.plan.orderedNodeIds.forEach((id) => visibleNodeIds.add(id));
+          inFinalHold = true;
+        }
+
+        // built edges = both endpoints visible, minus the one currently growing.
+        const builtEdgeIds = new Set(
+          edges.filter((e) => visibleNodeIds.has(e.source) && visibleNodeIds.has(e.target)).map((e) => e.id)
+        );
+        if (activeEdgeId) builtEdgeIds.delete(activeEdgeId);
+
+        return {
+          visibleNodeIds,
+          builtEdgeIds,
+          activeNodeId,
+          activeNodeProgress,
+          activeEdgeId,
+          activeEdgeProgress,
+          complete: inFinalHold && clamped >= timeline.totalDurationMs,
+        };
+      }
+
+      // =====================================================================
+      // SVG construction.
+      // =====================================================================
+      const SVG_NS = 'http://www.w3.org/2000/svg';
+      const svg = document.getElementById('diagram');
+
+      function edgePath(edge) {
+        const s = nodeById.get(edge.source);
+        const t = nodeById.get(edge.target);
+        const sx = s.x + NODE_W / 2;
+        const sy = s.y + NODE_H;
+        const tx = t.x + NODE_W / 2;
+        const ty = t.y;
+        const dy = (ty - sy) * 0.5;
+        return `M ${sx} ${sy} C ${sx} ${sy + dy}, ${tx} ${ty - dy}, ${tx} ${ty}`;
+      }
+
+      // defs: arrow marker
+      const defs = document.createElementNS(SVG_NS, 'defs');
+      defs.innerHTML =
+        '<marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+        '<path d="M0,0 L10,5 L0,10 z" fill="var(--edge)"></path></marker>' +
+        '<marker id="arrowLive" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+        '<path d="M0,0 L10,5 L0,10 z" fill="var(--edge-live)"></path></marker>';
+      svg.appendChild(defs);
+
+      const edgeLayer = document.createElementNS(SVG_NS, 'g');
+      const packetLayer = document.createElementNS(SVG_NS, 'g');
+      const nodeLayer = document.createElementNS(SVG_NS, 'g');
+      svg.append(edgeLayer, packetLayer, nodeLayer);
+
+      const edgeEls = new Map();
+      edges.forEach((e) => {
+        const path = document.createElementNS(SVG_NS, 'path');
+        const d = edgePath(e);
+        path.setAttribute('d', d);
+        path.setAttribute('fill', 'none');
+        path.setAttribute('stroke', 'var(--edge)');
+        path.setAttribute('stroke-width', '2');
+        path.setAttribute('stroke-linecap', 'round');
+        path.setAttribute('marker-end', 'url(#arrow)');
+        edgeLayer.appendChild(path);
+        const len = path.getTotalLength();
+        path.dataset.len = len;
+
+        const label = document.createElementNS(SVG_NS, 'text');
+        const mid = path.getPointAtLength(len / 2);
+        label.setAttribute('x', mid.x);
+        label.setAttribute('y', mid.y - 4);
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('class', 'edge-label');
+        label.textContent = e.label;
+        edgeLayer.appendChild(label);
+
+        edgeEls.set(e.id, { path, label, len });
+      });
+
+      const nodeEls = new Map();
+      nodes.forEach((n) => {
+        const g = document.createElementNS(SVG_NS, 'g');
+        g.setAttribute('transform', `translate(${n.x},${n.y})`);
+
+        const rect = document.createElementNS(SVG_NS, 'rect');
+        rect.setAttribute('width', NODE_W);
+        rect.setAttribute('height', NODE_H);
+        rect.setAttribute('rx', '12');
+        rect.setAttribute('fill', 'var(--node-fill)');
+        rect.setAttribute('stroke', 'var(--node-stroke)');
+        rect.setAttribute('stroke-width', '1.5');
+
+        const glyph = document.createElementNS(SVG_NS, 'text');
+        glyph.setAttribute('x', '26');
+        glyph.setAttribute('y', '40');
+        glyph.setAttribute('text-anchor', 'middle');
+        glyph.setAttribute('class', 'node-glyph');
+        glyph.textContent = n.glyph;
+
+        const label = document.createElementNS(SVG_NS, 'text');
+        label.setAttribute('x', '52');
+        label.setAttribute('y', '30');
+        label.setAttribute('class', 'node-label');
+        label.textContent = n.label;
+
+        const sub = document.createElementNS(SVG_NS, 'text');
+        sub.setAttribute('x', '52');
+        sub.setAttribute('y', '46');
+        sub.setAttribute('class', 'node-sub');
+        sub.textContent = n.sub;
+
+        g.append(rect, glyph, label, sub);
+        nodeLayer.appendChild(g);
+        nodeEls.set(n.id, g);
+      });
+
+      // =====================================================================
+      // Paint a render state to the DOM.
+      // =====================================================================
+      function paint(state, flowTimeMs) {
+        nodes.forEach((n) => {
+          const g = nodeEls.get(n.id);
+          let opacity = 0;
+          let scale = 0.9;
+          if (state.activeNodeId === n.id) {
+            opacity = state.activeNodeProgress;
+            scale = 0.9 + 0.1 * state.activeNodeProgress;
+          } else if (state.visibleNodeIds.has(n.id)) {
+            opacity = 1;
+            scale = 1;
+          }
+          g.style.opacity = opacity;
+          const cx = n.x + NODE_W / 2;
+          const cy = n.y + NODE_H / 2;
+          g.setAttribute(
+            'transform',
+            `translate(${n.x},${n.y}) translate(${cx - n.x},${cy - n.y}) scale(${scale}) translate(${n.x - cx},${n.y - cy})`
+          );
+        });
+
+        edges.forEach((e) => {
+          const { path, label, len } = edgeEls.get(e.id);
+          let visibleLen = 0;
+          let live = false;
+          if (state.activeEdgeId === e.id) {
+            visibleLen = len * state.activeEdgeProgress;
+            live = true;
+          } else if (state.builtEdgeIds.has(e.id)) {
+            visibleLen = len;
+          }
+          path.style.strokeDasharray = len;
+          path.style.strokeDashoffset = len - visibleLen;
+          path.setAttribute('stroke', live ? 'var(--edge-live)' : 'var(--edge)');
+          path.setAttribute('marker-end', visibleLen > len - 1 ? (live ? 'url(#arrowLive)' : 'url(#arrow)') : 'none');
+          label.style.opacity = state.builtEdgeIds.has(e.id) ? 0.9 : 0;
+        });
+
+        // Flow packets only once the build is complete.
+        packetLayer.replaceChildren();
+        if (state.complete) {
+          const SPEED_PX_PER_SEC = 90;
+          edges.forEach((e) => {
+            const { path, len } = edgeEls.get(e.id);
+            const count = Math.max(1, Math.round(len / 110));
+            for (let i = 0; i < count; i++) {
+              const phase = ((flowTimeMs / 1000) * SPEED_PX_PER_SEC + (i / count) * len) % len;
+              const pt = path.getPointAtLength(phase);
+              const dot = document.createElementNS(SVG_NS, 'circle');
+              dot.setAttribute('cx', pt.x);
+              dot.setAttribute('cy', pt.y);
+              dot.setAttribute('r', '4');
+              dot.setAttribute('fill', 'var(--packet)');
+              packetLayer.appendChild(dot);
+            }
+          });
+        }
+      }
+
+      // =====================================================================
+      // Playback controller.
+      // =====================================================================
+      const playBtn = document.getElementById('playBtn');
+      const restartBtn = document.getElementById('restartBtn');
+      const themeBtn = document.getElementById('themeBtn');
+      const scrub = document.getElementById('scrub');
+      const statusEl = document.getElementById('status');
+      const speedBtns = [...document.querySelectorAll('[data-speed]')];
+
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      let speed = 'normal';
+      let plan = buildPlan(nodes, edges);
+      let timeline = buildTimeline(plan, basePreset(speed));
+      let timeMs = 0;
+      let flowMs = 0;
+      let playing = false;
+      let lastFrame = 0;
+
+      function rebuildTimeline() {
+        const ratio = timeline.totalDurationMs ? timeMs / timeline.totalDurationMs : 0;
+        timeline = buildTimeline(plan, basePreset(speed));
+        timeMs = ratio * timeline.totalDurationMs;
+      }
+
+      function setStatus(state) {
+        const pct = Math.round((timeMs / timeline.totalDurationMs) * 100);
+        if (state.complete) {
+          statusEl.textContent = `Built · flow running${plan.hasTopologyFallback ? ' · layout order' : ''}`;
+        } else if (state.activeEdgeId) {
+          statusEl.textContent = `Drawing edge → ${edgeById.get(state.activeEdgeId).target} · ${pct}%`;
+        } else if (state.activeNodeId) {
+          statusEl.textContent = `Revealing ${nodeById.get(state.activeNodeId).label} · ${pct}%`;
+        } else {
+          statusEl.textContent = `Building · ${pct}%`;
+        }
+      }
+
+      function render() {
+        const state = resolveRenderState(timeline, timeMs);
+        paint(state, flowMs);
+        scrub.value = Math.round((timeMs / timeline.totalDurationMs) * 1000);
+        setStatus(state);
+        return state;
+      }
+
+      function tick(now) {
+        if (!playing) return;
+        const dt = lastFrame ? now - lastFrame : 16;
+        lastFrame = now;
+        if (timeMs < timeline.totalDurationMs) {
+          timeMs = Math.min(timeline.totalDurationMs, timeMs + dt);
+        } else {
+          flowMs += dt; // loop flow forever
+        }
+        render();
+        requestAnimationFrame(tick);
+      }
+
+      function play() {
+        if (playing) return;
+        if (timeMs >= timeline.totalDurationMs && flowMs === 0) timeMs = 0;
+        playing = true;
+        playBtn.textContent = 'Pause';
+        lastFrame = 0;
+        requestAnimationFrame(tick);
+      }
+      function pause() {
+        playing = false;
+        playBtn.textContent = 'Play';
+      }
+      function restart() {
+        timeMs = 0;
+        flowMs = 0;
+        render();
+      }
+
+      playBtn.addEventListener('click', () => (playing ? pause() : play()));
+      restartBtn.addEventListener('click', () => {
+        restart();
+        play();
+      });
+
+      speedBtns.forEach((btn) =>
+        btn.addEventListener('click', () => {
+          speed = btn.dataset.speed;
+          speedBtns.forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+          rebuildTimeline();
+          render();
+        })
+      );
+
+      themeBtn.addEventListener('click', () => {
+        const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+        document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+        themeBtn.textContent = dark ? 'Dark' : 'Light';
+      });
+
+      scrub.addEventListener('input', () => {
+        pause();
+        timeMs = (Number(scrub.value) / 1000) * timeline.totalDurationMs;
+        flowMs = 0;
+        render();
+      });
+
+      // Initial paint. Reduced motion → jump straight to the built diagram.
+      if (reduceMotion) {
+        timeMs = timeline.totalDurationMs;
+        render();
+        statusEl.textContent = 'Built (reduced motion)';
+      } else {
+        render();
+      }
+    </script>
+  </body>
+</html>
