@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "meta": {
+    "id": "order-checkout",
+    "title": "Order Checkout — Request Flow",
+    "description": "End-to-end ingress through gateway, orchestration, async fulfilment and the failure path.",
+    "diagramType": "architecture",
+    "direction": "LR"
+  },
+  "nodes": [
+    { "id": "client", "label": "Web / Mobile Client", "type": "actor", "shape": "actor" },
+    {
+      "id": "edge", "label": "Edge", "isContainer": true,
+      "metadata": { "trustBoundary": "public", "environment": "prod" }
+    },
+    { "id": "gw", "label": "API Gateway", "type": "gateway", "shape": "hexagon", "parentId": "edge", "metadata": { "protocol": "HTTPS", "systemOwner": "Platform" } },
+    {
+      "id": "core", "label": "Core Services", "isContainer": true,
+      "metadata": { "trustBoundary": "internal", "environment": "prod" }
+    },
+    { "id": "orders", "label": "Order Service", "type": "service", "shape": "rounded", "parentId": "core", "metadata": { "systemOwner": "Checkout", "protocol": "gRPC" } },
+    { "id": "queue", "label": "Fulfilment Queue", "type": "queue", "shape": "stadium", "parentId": "core", "metadata": { "protocol": "AMQP" } },
+    { "id": "fulfil", "label": "Fulfilment Worker", "type": "service", "shape": "rounded", "parentId": "core", "metadata": { "systemOwner": "Logistics" } },
+    { "id": "db", "label": "Orders DB", "type": "database", "shape": "cylinder", "parentId": "core", "metadata": { "protocol": "PostgreSQL" } },
+    { "id": "psp", "label": "Payment Provider", "type": "external", "shape": "rectangle", "metadata": { "trustBoundary": "third-party", "systemOwner": "Stripe" } },
+    { "id": "dlq", "label": "Dead Letter Queue", "type": "queue", "shape": "stadium", "parentId": "core" }
+  ],
+  "edges": [
+    { "id": "e1", "source": "client", "target": "gw", "label": "POST /orders", "kind": "sync" },
+    { "id": "e2", "source": "gw", "target": "orders", "label": "createOrder", "kind": "sync" },
+    { "id": "e3", "source": "orders", "target": "psp", "label": "authorize", "kind": "sync" },
+    { "id": "e4", "source": "orders", "target": "db", "label": "persist", "kind": "data" },
+    { "id": "e5", "source": "orders", "target": "queue", "label": "enqueue", "kind": "async" },
+    { "id": "e6", "source": "queue", "target": "fulfil", "label": "consume", "kind": "async" },
+    { "id": "e7", "source": "fulfil", "target": "dlq", "label": "on failure", "kind": "error" }
+  ],
+  "timeline": {
+    "steps": [
+      { "id": "s1", "label": "Ingress", "description": "Client sends the order request.", "revealNodeIds": ["client", "edge", "gw"], "revealEdgeIds": ["e1"], "highlightEdgeIds": ["e1"] },
+      { "id": "s2", "label": "Orchestration", "description": "Gateway routes to the Order Service.", "revealNodeIds": ["core", "orders"], "revealEdgeIds": ["e2"], "highlightEdgeIds": ["e2"] },
+      { "id": "s3", "label": "Payment", "description": "Synchronous authorization with the PSP.", "revealNodeIds": ["psp"], "revealEdgeIds": ["e3"], "highlightEdgeIds": ["e3"] },
+      { "id": "s4", "label": "Persist", "description": "Order written to the database.", "revealNodeIds": ["db"], "revealEdgeIds": ["e4"], "highlightEdgeIds": ["e4"] },
+      { "id": "s5", "label": "Async fulfilment", "description": "Work handed off to the queue and worker.", "revealNodeIds": ["queue", "fulfil"], "revealEdgeIds": ["e5", "e6"], "highlightEdgeIds": ["e5", "e6"] },
+      { "id": "s6", "label": "Failure path", "description": "Failed messages route to the DLQ.", "revealNodeIds": ["dlq"], "revealEdgeIds": ["e7"], "highlightEdgeIds": ["e7"], "branch": { "condition": "delivery failed" } }
+    ]
+  }
+}

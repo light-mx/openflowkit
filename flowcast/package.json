@@ -1,0 +1,37 @@
+{
+  "name": "@flowcast/confluence",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Canonical diagram schema and Confluence publishing helper for FlowCast — interactive, animated architecture diagrams.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "flowcast-confluence": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "CONFLUENCE.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "cli": "node dist/cli.js"
+  },
+  "keywords": [
+    "diagram",
+    "architecture",
+    "confluence",
+    "mermaid",
+    "drawio",
+    "animation"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
